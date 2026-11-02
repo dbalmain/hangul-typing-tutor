@@ -4,16 +4,27 @@ import {
   KEYS,
   LESSON_COUNT,
   ORDER,
+  focusStroke,
   generateLine,
+  generatePracticeLine,
   generateWord,
   introduced,
+  isBoardToggle,
+  isCompetent,
+  isHintRequest,
   latinStrokes,
+  noteAttempt,
   mulberry32,
   poolForLesson,
+  poolIsCompetent,
   renderStrokes,
   stageName,
+  strokeKey,
   strokeMatches,
   strokeOf,
+  struggling,
+  syllableParts,
+  undoHit,
 } from "./tutor.js";
 
 test("known words come out of the QWERTY key sequence", () => {
@@ -72,6 +83,16 @@ test("drills stay inside the unlocked keys and include the new one", () => {
         `lesson ${lesson} word missed ${newest.jamo}`,
       );
       assert.equal(renderStrokes(word.strokes), word.text);
+      assert.equal(word.syllables.length, 2);
+      assert.deepEqual(word.syllables.flat(), word.strokes);
+      assert.equal(
+        word.syllables.map((part) => renderStrokes(part)).join(""),
+        word.text,
+      );
+      assert.equal(
+        syllableParts(word.syllables[0]).parts.some((part) => part.role === "jong"),
+        false,
+      );
       assert.ok([...word.text].every((ch) => ch >= "가" && ch <= "힣"));
     }
   }
@@ -86,6 +107,118 @@ test("a batchim does not glue onto the next syllable", () => {
   }
   const line = generateLine(12, mulberry32(3));
   assert.equal(line.length, 4);
+});
+
+test("the next letter waits until every current one is competent", () => {
+  const pool = poolForLesson(0);
+  const [ieung, a] = pool;
+  const tally = {
+    [strokeKey(ieung)]: { hit: 10, miss: 0 },
+    [strokeKey(a)]: { hit: 9, miss: 1 },
+  };
+  assert.equal(isCompetent(tally[strokeKey(ieung)]), true);
+  assert.equal(isCompetent({ hit: 9, miss: 0 }), false);
+  assert.equal(isCompetent({ hit: 8, miss: 2 }), false);
+  assert.equal(poolIsCompetent(pool, tally), true);
+  assert.equal(focusStroke(pool, tally).jamo, "ㅏ");
+  tally[strokeKey(a)] = { hit: 10, miss: 0 };
+  assert.equal(focusStroke(pool, tally), null);
+
+  tally[strokeKey(a)] = { hit: 8, miss: 2 };
+  assert.equal(poolIsCompetent(pool, tally), false);
+  assert.equal(focusStroke(pool, tally).jamo, "ㅏ");
+
+  const withNieun = poolForLesson(1);
+  const nieun = introduced(1)[0];
+  const practiced = {
+    [strokeKey(ieung)]: { hit: 10, miss: 0 },
+    [strokeKey(a)]: { hit: 10, miss: 1 },
+    [strokeKey(nieun)]: { hit: 3, miss: 0 },
+  };
+  assert.equal(focusStroke(withNieun, practiced).jamo, "ㄴ");
+  practiced[strokeKey(nieun)] = { hit: 10, miss: 0 };
+  practiced[strokeKey(ieung)] = { hit: 10, miss: 6 };
+  assert.equal(focusStroke(withNieun, practiced).jamo, "ㅇ");
+});
+
+test("struggling letters are the ones missed most often", () => {
+  const pool = poolForLesson(2);
+  const [ieung, a, nieun] = pool;
+  const tally = {
+    [strokeKey(ieung)]: { hit: 20, miss: 2 },
+    [strokeKey(a)]: { hit: 4, miss: 6 },
+    [strokeKey(nieun)]: { hit: 10, miss: 0 },
+  };
+  const ranked = struggling(pool, tally, 5).map((item) => item.stroke.jamo);
+  assert.deepEqual(ranked, ["ㅏ", "ㅇ"]);
+});
+
+test("a practice line stays in the pool and includes the focused letter", () => {
+  const pool = poolForLesson(3);
+  const focus = introduced(3)[0];
+  const line = generatePracticeLine(mulberry32(4), pool, focus);
+  assert.equal(line.length, 4);
+  for (const word of line) {
+    assert.ok(word.strokes.some((stroke) => stroke.jamo === focus.jamo));
+    for (const stroke of word.strokes) {
+      assert.ok(pool.some((item) => item.jamo === stroke.jamo && item.shift === stroke.shift));
+    }
+  }
+});
+
+test("a rough start falls out of the last 10 presses", () => {
+  const giyeok = ORDER.find((stroke) => stroke.jamo === "ㄱ" && !stroke.shift);
+  assert.equal(isCompetent({ hit: 2, miss: 8 }), false);
+  let stat = { hit: 2, miss: 8 };
+  for (let i = 0; i < 10; i++) stat = noteAttempt(stat, 1);
+  assert.equal(stat.recent.length, 10);
+  assert.equal(isCompetent(stat), true);
+  stat = noteAttempt(stat, 0);
+  assert.equal(isCompetent(stat), true);
+  stat = noteAttempt(stat, 0);
+  assert.equal(isCompetent(stat), false);
+  assert.equal(isCompetent({ hit: 100, miss: 0, recent: [1, 1, 1, 1, 1, 1, 1, 1, 0, 0] }), false);
+  assert.equal(isCompetent({ hit: 2, miss: 8, recent: [1, 1, 1] }), false);
+  let capped;
+  for (let i = 0; i < 25; i++) capped = noteAttempt(capped, 1);
+  assert.equal(capped.recent.length, 20);
+  const undone = undoHit(noteAttempt(undefined, 1));
+  assert.deepEqual(undone.recent, []);
+  assert.equal(undone.hit, 0);
+  assert.deepEqual(undoHit(noteAttempt(undefined, 0)).recent, [0]);
+  const pool = poolForLesson(8);
+  const tally = {};
+  for (const stroke of pool) {
+    tally[strokeKey(stroke)] = stroke === giyeok ? stat : { hit: 10, miss: 0 };
+  }
+  assert.equal(poolIsCompetent(pool, tally), false);
+  tally[strokeKey(giyeok)] = { hit: 2, miss: 8, recent: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] };
+  assert.equal(poolIsCompetent(pool, tally), true);
+});
+
+test("syllable pieces sit beside, under, or both", () => {
+  const roles = (latin) =>
+    syllableParts(latinStrokes(latin)).parts.map((part) => `${part.role}:${part.jamo}`);
+  assert.equal(syllableParts(latinStrokes("rk")).kind, "vertical");
+  assert.deepEqual(roles("rk"), ["cho:ㄱ", "v:ㅏ"]);
+  assert.equal(syllableParts(latinStrokes("rh")).kind, "horizontal");
+  assert.deepEqual(roles("rh"), ["cho:ㄱ", "h:ㅗ"]);
+  assert.equal(syllableParts(latinStrokes("dhk")).kind, "mixed");
+  assert.deepEqual(roles("dhk"), ["cho:ㅇ", "h:ㅗ", "v:ㅏ"]);
+  assert.equal(syllableParts(latinStrokes("dml")).kind, "mixed");
+  assert.deepEqual(roles("dml"), ["cho:ㅇ", "h:ㅡ", "v:ㅣ"]);
+  assert.deepEqual(roles("ekfr"), ["cho:ㄷ", "v:ㅏ", "jong:ㄹ", "jong:ㄱ"]);
+  assert.deepEqual(roles("rkqt"), ["cho:ㄱ", "v:ㅏ", "jong:ㅂ", "jong:ㅅ"]);
+});
+
+test("? asks for the US key and ` hides the keyboard", () => {
+  assert.equal(isHintRequest("Slash", true, "?"), true);
+  assert.equal(isHintRequest("Slash", true, "Shift"), true);
+  assert.equal(isHintRequest("Slash", false, "/"), false);
+  assert.equal(isHintRequest("KeyA", false, "a"), false);
+  assert.equal(isBoardToggle("Backquote", false), true);
+  assert.equal(isBoardToggle("Backquote", true), false);
+  assert.equal(isBoardToggle("Slash", false), false);
 });
 
 test("shift is required only when the letter changes", () => {

@@ -67,6 +67,8 @@ const JONG_SPLIT = Object.fromEntries(
 );
 
 const VOWELS = new Set([..."ㅛㅕㅑㅐㅔㅗㅓㅏㅣㅠㅜㅡㅒㅖ"]);
+// Vowels that sit under the initial. The rest sit to its right.
+const HORIZONTAL_VOWEL = new Set([..."ㅗㅛㅜㅠㅡ"]);
 
 /** @type {Record<string, { us: string, jamo: string, shiftJamo: string | null, finger: string, home: boolean, bump: boolean }>} */
 export const KEYS = {
@@ -188,8 +190,136 @@ export const LESSON_COUNT = ORDER.length - 1;
 
 export const PASS_ACCURACY = 0.95;
 export const PASS_NEW = 0.9;
+export const MIN_ATTEMPTS = 10;
+export const RECENT_CAP = 20;
 export const LINES_PER_DRILL = 4;
 export const WORDS_PER_LINE = 4;
+
+/** @param {Stroke} stroke */
+export function strokeKey(stroke) {
+  return `${stroke.code}:${stroke.shift ? 1 : 0}`;
+}
+
+/**
+ * Last 10 presses, once that many exist. A lifetime ratio never drops an
+ * early miss, so two misses on ㄱ used to demand 18 later hits before the
+ * next letter could join. Saved tallies with no window keep the lifetime
+ * ratio until the new presses fill one.
+ * @param {{ hit?: number, miss?: number, recent?: number[] } | null | undefined} stat
+ */
+export function isCompetent(stat) {
+  const recent = cleanRecent(stat?.recent);
+  if (recent.length >= MIN_ATTEMPTS) {
+    const window = recent.slice(-MIN_ATTEMPTS);
+    const hits = window.reduce((sum, bit) => sum + bit, 0);
+    return hits / MIN_ATTEMPTS >= PASS_NEW;
+  }
+  const hit = stat?.hit ?? 0;
+  const miss = stat?.miss ?? 0;
+  const total = hit + miss;
+  return total >= MIN_ATTEMPTS && hit / total >= PASS_NEW;
+}
+
+/** @param {unknown} recent */
+function cleanRecent(recent) {
+  if (!Array.isArray(recent)) return [];
+  const bits = [];
+  for (const bit of recent) {
+    if (bit === 0 || bit === 1) bits.push(bit);
+  }
+  return bits.slice(-RECENT_CAP);
+}
+
+/**
+ * @param {{ hit?: number, miss?: number, recent?: number[] } | null | undefined} stat
+ * @param {0 | 1} bit
+ */
+export function noteAttempt(stat, bit) {
+  const mark = bit ? 1 : 0;
+  return {
+    hit: Math.max(0, (stat?.hit ?? 0) + mark),
+    miss: Math.max(0, (stat?.miss ?? 0) + (mark ? 0 : 1)),
+    recent: [...cleanRecent(stat?.recent), mark].slice(-RECENT_CAP),
+  };
+}
+
+/**
+ * Drop one correct press. A trailing miss stays, because undo only walks
+ * back a stroke that was accepted.
+ * @param {{ hit?: number, miss?: number, recent?: number[] } | null | undefined} stat
+ */
+export function undoHit(stat) {
+  const recent = cleanRecent(stat?.recent);
+  if (recent.at(-1) === 1) recent.pop();
+  return {
+    hit: Math.max(0, (stat?.hit ?? 0) - 1),
+    miss: Math.max(0, stat?.miss ?? 0),
+    recent,
+  };
+}
+
+/** @param {Stroke[]} pool @param {Record<string, {hit: number, miss: number}>} tally */
+export function poolIsCompetent(pool, tally) {
+  return pool.every((stroke) => isCompetent(tally[strokeKey(stroke)]));
+}
+
+/**
+ * Letters with at least one miss, most misses first.
+ * @param {Stroke[]} pool
+ * @param {Record<string, {hit: number, miss: number}>} tally
+ * @param {number} [limit]
+ */
+export function struggling(pool, tally, limit = 5) {
+  return pool
+    .map((stroke) => {
+      const stat = tally[strokeKey(stroke)] ?? { hit: 0, miss: 0 };
+      const total = stat.hit + stat.miss;
+      return {
+        stroke,
+        hit: stat.hit,
+        miss: stat.miss,
+        accuracy: total === 0 ? 1 : stat.hit / total,
+      };
+    })
+    .filter((item) => item.miss > 0)
+    .sort(
+      (a, b) =>
+        b.miss - a.miss ||
+        a.accuracy - b.accuracy ||
+        a.stroke.jamo.codePointAt(0) - b.stroke.jamo.codePointAt(0),
+    )
+    .slice(0, limit);
+}
+
+/**
+ * The letter this drill should force into every word.
+ * A new letter stays in focus until it is competent. After that, the
+ * least competent letter with the most misses does.
+ * @param {Stroke[]} pool
+ * @param {Record<string, {hit: number, miss: number}>} tally
+ * @returns {Stroke | null}
+ */
+export function focusStroke(pool, tally) {
+  if (!pool.length) return null;
+  const newest = pool[pool.length - 1];
+  if (!isCompetent(tally[strokeKey(newest)])) return newest;
+  const weak = struggling(pool, tally, pool.length).find(
+    (item) => !isCompetent(tally[strokeKey(item.stroke)]),
+  );
+  if (weak) return weak.stroke;
+  const top = struggling(pool, tally, 1)[0];
+  return top ? top.stroke : null;
+}
+
+/** Physical Shift+/ on a US keyboard, or a key that produced "?". */
+export function isHintRequest(code, shift, key) {
+  return (code === "Slash" && shift) || key === "?";
+}
+
+/** Unshifted ` / ~ key. Shifted is not the toggle. */
+export function isBoardToggle(code, shift) {
+  return code === "Backquote" && !shift;
+}
 
 /** @param {number} lessonIndex */
 export function poolForLesson(lessonIndex) {
@@ -395,8 +525,40 @@ function syllableStrokes(rng, pool, newest, allowJong) {
 }
 
 /**
+ * Where each stroke sits in a syllable block. A finished Hangul character is
+ * one code point, so the pieces have to be drawn separately to color one of
+ * them. `h` is the vowel under the initial, `v` is the vowel on its right.
+ *
+ * @param {Stroke[]} strokes
+ * @returns {{ kind: "vertical" | "horizontal" | "mixed", parts: { role: "cho" | "v" | "h" | "jong", jamo: string, index: number }[] }}
+ */
+export function syllableParts(strokes) {
+  /** @type {{ role: "cho" | "v" | "h" | "jong", jamo: string, index: number }[]} */
+  const parts = [];
+  let horizontal = false;
+  let vertical = false;
+  strokes.forEach((stroke, index) => {
+    if (index === 0) {
+      parts.push({ role: "cho", jamo: stroke.jamo, index });
+      return;
+    }
+    if (stroke.vowel) {
+      const role = HORIZONTAL_VOWEL.has(stroke.jamo) ? "h" : "v";
+      if (role === "h") horizontal = true;
+      else vertical = true;
+      parts.push({ role, jamo: stroke.jamo, index });
+      return;
+    }
+    parts.push({ role: "jong", jamo: stroke.jamo, index });
+  });
+  const kind = horizontal && vertical ? "mixed" : horizontal ? "horizontal" : "vertical";
+  return { kind, parts };
+}
+
+/**
  * Two syllables. The newest jamo is in one of them. Only the second syllable
  * may carry a batchim, so the key sequence renders as those two blocks.
+ * `syllables` is the same strokes, split where each block starts.
  *
  * @param {() => number} rng
  * @param {Stroke[]} pool
@@ -405,13 +567,13 @@ function syllableStrokes(rng, pool, newest, allowJong) {
 export function generateWord(rng, pool, newest) {
   for (let attempt = 0; attempt < 30; attempt++) {
     const host = newest ? (rng() < 0.5 ? 0 : 1) : -1;
-    const parts = [0, 1].map((index) =>
+    const syllables = [0, 1].map((index) =>
       syllableStrokes(rng, pool, index === host ? newest : null, index === 1),
     );
-    const strokes = parts.flat();
+    const strokes = syllables.flat();
     const text = renderStrokes(strokes);
-    const pieces = parts.map((part) => renderStrokes(part));
-    if (text === pieces.join("")) return { strokes, text };
+    const pieces = syllables.map((part) => renderStrokes(part));
+    if (text === pieces.join("")) return { strokes, text, syllables };
   }
   throw new Error("could not build a stable word");
 }
@@ -423,10 +585,13 @@ export function generateWord(rng, pool, newest) {
 export function generateLine(lessonIndex, rng) {
   const pool = poolForLesson(lessonIndex);
   const [newest] = introduced(lessonIndex).slice(-1);
+  return generatePracticeLine(rng, pool, newest);
+}
+
+/** @param {() => number} rng @param {Stroke[]} pool @param {Stroke | null} focus */
+export function generatePracticeLine(rng, pool, focus) {
   const words = [];
-  for (let i = 0; i < WORDS_PER_LINE; i++) {
-    words.push(generateWord(rng, pool, newest));
-  }
+  for (let i = 0; i < WORDS_PER_LINE; i++) words.push(generateWord(rng, pool, focus));
   return words;
 }
 

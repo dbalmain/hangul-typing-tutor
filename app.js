@@ -1,67 +1,144 @@
 import {
   KEYS,
   KEY_ROWS,
-  LESSON_COUNT,
   LINES_PER_DRILL,
-  PASS_ACCURACY,
-  PASS_NEW,
-  generateLine,
-  introduced,
+  ORDER,
+  RECENT_CAP,
+  focusStroke,
+  generatePracticeLine,
+  isBoardToggle,
+  isCompetent,
+  isHintRequest,
   keyLabel,
   mulberry32,
-  poolForLesson,
+  noteAttempt,
+  poolIsCompetent,
   preferredShift,
-  sameStroke,
+  renderStrokes,
   stageName,
+  strokeKey,
   strokeMatches,
+  struggling,
+  syllableParts,
+  undoHit,
 } from "./tutor.js";
 
-const STORAGE = "hangul-keys-progress-v1";
+const STORAGE = "hangul-keys-progress-v2";
+const LEGACY = "hangul-keys-progress-v1";
+const KEYBOARD = "hangul-keys-keyboard";
 
 const eyebrow = document.querySelector("#eyebrow");
 const title = document.querySelector("#title");
 const score = document.querySelector("#score");
 const help = document.querySelector("#help");
+const struggle = document.querySelector("#struggle");
 const stage = document.querySelector("#stage");
 const callout = document.querySelector("#callout");
 const board = document.querySelector("#board");
-const lessonSelect = document.querySelector("#lesson");
 const repeatButton = document.querySelector("#repeat");
-const nextButton = document.querySelector("#next");
 const resetButton = document.querySelector("#reset");
+const keyboardButton = document.querySelector("#keyboard");
 
 let progress = loadProgress();
+let keyboardHidden = localStorage.getItem(KEYBOARD) === "hidden";
 let drill = null;
 let badTimer = 0;
-let optionSignature = "";
+
+function freshProgress() {
+  return { pool: 2, tally: {}, finished: false };
+}
+
+function clampPool(pool) {
+  if (!Number.isInteger(pool)) return 2;
+  return Math.max(2, Math.min(ORDER.length, pool));
+}
 
 function loadProgress() {
   try {
-    const data = JSON.parse(localStorage.getItem(STORAGE) || "");
-    const unlocked = clampLesson(data.unlocked ?? 0);
-    return {
-      unlocked,
-      current: clampLesson(Math.min(data.current ?? 0, unlocked)),
-      finished: Boolean(data.finished),
-    };
+    return normalize(JSON.parse(localStorage.getItem(STORAGE) || ""));
   } catch {
-    return { unlocked: 0, current: 0, finished: false };
+    try {
+      const old = JSON.parse(localStorage.getItem(LEGACY) || "");
+      const lesson = Number.isInteger(old.current) ? old.current : 0;
+      return normalize({ pool: lesson + 2, tally: {}, finished: old.finished });
+    } catch {
+      return freshProgress();
+    }
   }
+}
+
+function keptRecent(recent) {
+  if (!Array.isArray(recent)) return [];
+  const bits = [];
+  for (const bit of recent) {
+    if (bit === 0 || bit === 1) bits.push(bit);
+  }
+  return bits.slice(-RECENT_CAP);
+}
+
+function normalize(data) {
+  const tally = {};
+  if (data.tally && typeof data.tally === "object") {
+    for (const [key, stat] of Object.entries(data.tally)) {
+      if (!stat || typeof stat !== "object") continue;
+      const recent = keptRecent(stat.recent);
+      tally[key] = {
+        hit: Math.max(0, stat.hit | 0),
+        miss: Math.max(0, stat.miss | 0),
+        ...(recent.length ? { recent } : {}),
+      };
+    }
+  }
+  return {
+    pool: clampPool(data.pool),
+    tally,
+    finished: Boolean(data.finished),
+  };
 }
 
 function saveProgress() {
   localStorage.setItem(STORAGE, JSON.stringify(progress));
 }
 
-function clampLesson(index) {
-  if (!Number.isInteger(index)) return 0;
-  return Math.max(0, Math.min(LESSON_COUNT - 1, index));
+function currentPool() {
+  return ORDER.slice(0, progress.pool);
+}
+
+function note(stroke, bit) {
+  const key = strokeKey(stroke);
+  progress.tally[key] = noteAttempt(progress.tally[key], bit);
+  saveProgress();
+}
+
+function applyKeyboard() {
+  document.body.classList.toggle("keyboard-hidden", keyboardHidden);
+  keyboardButton.textContent = keyboardHidden ? "Show keyboard (`)" : "Hide keyboard (`)";
+  keyboardButton.setAttribute("aria-pressed", String(keyboardHidden));
+}
+
+function toggleKeyboard() {
+  keyboardHidden = !keyboardHidden;
+  localStorage.setItem(KEYBOARD, keyboardHidden ? "hidden" : "shown");
+  applyKeyboard();
 }
 
 function startDrill() {
+  const poolBefore = currentPool();
+  let added = null;
+  if (progress.pool < ORDER.length && poolIsCompetent(poolBefore, progress.tally)) {
+    progress.pool += 1;
+    added = ORDER[progress.pool - 1];
+    saveProgress();
+  }
+  const pool = currentPool();
+  if (progress.pool === ORDER.length && poolIsCompetent(pool, progress.tally)) {
+    progress.finished = true;
+    saveProgress();
+  }
+  const focus = focusStroke(pool, progress.tally);
   const rng = mulberry32((Date.now() ^ (Math.random() * 0x100000000)) >>> 0);
   const lines = [];
-  for (let i = 0; i < LINES_PER_DRILL; i++) lines.push(generateLine(progress.current, rng));
+  for (let i = 0; i < LINES_PER_DRILL; i++) lines.push(generatePracticeLine(rng, pool, focus));
   drill = {
     lines,
     li: 0,
@@ -69,10 +146,10 @@ function startDrill() {
     ki: 0,
     correct: 0,
     wrong: 0,
-    newHits: 0,
-    newMisses: 0,
     phase: "drill",
     badCode: null,
+    hint: false,
+    notice: added ? `Added ${added.jamo}` : "",
   };
   render();
 }
@@ -81,21 +158,10 @@ function currentWord() {
   return drill.lines[drill.li][drill.wi];
 }
 
-function introducedNow() {
-  return introduced(progress.current);
-}
-
-function isNew(stroke) {
-  return introducedNow().some((item) => sameStroke(item, stroke));
-}
-
 function stats() {
   const total = drill.correct + drill.wrong;
   const accuracy = total === 0 ? 1 : drill.correct / total;
-  const neu = drill.newHits + drill.newMisses;
-  const neuAccuracy = neu === 0 ? 0 : drill.newHits / neu;
-  const passed = total > 0 && accuracy >= PASS_ACCURACY && neu > 0 && neuAccuracy >= PASS_NEW;
-  return { total, accuracy, neu, neuAccuracy, passed };
+  return { total, accuracy };
 }
 
 function percent(value) {
@@ -105,8 +171,20 @@ function percent(value) {
 function onKey(event) {
   if (event.repeat) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (isBoardToggle(event.code, event.shiftKey)) {
+    event.preventDefault();
+    toggleKeyboard();
+    return;
+  }
   const tag = event.target && event.target.tagName;
   if (tag === "BUTTON" || tag === "SELECT" || tag === "OPTION") return;
+  if (isHintRequest(event.code, event.shiftKey, event.key)) {
+    event.preventDefault();
+    if (!drill || drill.phase !== "drill") return;
+    drill.hint = !drill.hint;
+    render();
+    return;
+  }
   if (event.code === "ShiftLeft" || event.code === "ShiftRight") return;
   const typing = event.code === "Space" || event.code === "Backspace" || event.code.startsWith("Key");
   if (!typing) return;
@@ -123,7 +201,10 @@ function undo() {
   if (drill.ki === 0) return;
   drill.ki -= 1;
   drill.correct -= 1;
-  if (isNew(currentWord().strokes[drill.ki])) drill.newHits -= 1;
+  const stroke = currentWord().strokes[drill.ki];
+  progress.tally[strokeKey(stroke)] = undoHit(progress.tally[strokeKey(stroke)]);
+  saveProgress();
+  drill.hint = false;
   render();
 }
 
@@ -138,7 +219,8 @@ function press(pressed) {
   if (strokeMatches(expected, pressed)) {
     drill.ki += 1;
     drill.correct += 1;
-    if (isNew(expected)) drill.newHits += 1;
+    note(expected, 1);
+    drill.hint = false;
     render();
     return;
   }
@@ -147,7 +229,7 @@ function press(pressed) {
 
 function markWrong(code, expected) {
   drill.wrong += 1;
-  if (expected && isNew(expected)) drill.newMisses += 1;
+  if (expected) note(expected, 0);
   drill.badCode = code;
   window.clearTimeout(badTimer);
   badTimer = window.setTimeout(() => {
@@ -159,6 +241,7 @@ function markWrong(code, expected) {
 
 function advanceWord() {
   drill.ki = 0;
+  drill.hint = false;
   drill.wi += 1;
   if (drill.wi < drill.lines[drill.li].length) {
     render();
@@ -170,14 +253,7 @@ function advanceWord() {
     render();
     return;
   }
-  drill.phase = "summary";
-  const { passed } = stats();
-  if (passed && progress.current < LESSON_COUNT - 1) {
-    progress.unlocked = Math.max(progress.unlocked, progress.current + 1);
-  }
-  if (passed && progress.current === LESSON_COUNT - 1) progress.finished = true;
-  saveProgress();
-  render();
+  startDrill();
 }
 
 function chip(stroke, state) {
@@ -185,47 +261,68 @@ function chip(stroke, state) {
   return `<kbd class="${state}">${shift}${stroke.us}</kbd>`;
 }
 
-function renderStage() {
-  if (drill.phase === "summary") {
-    const { accuracy, neuAccuracy, passed } = stats();
-    const intro = introducedNow();
-    const introText = intro.map((stroke) => `${keyLabel(stroke)} ${stroke.jamo}`).join(" and ");
-    const nextLesson = progress.current + 1;
-    let detail;
-    if (passed && nextLesson < LESSON_COUNT) {
-      const upcoming = introduced(nextLesson)
-        .map((stroke) => `${keyLabel(stroke)} ${stroke.jamo}`)
-        .join(" and ");
-      detail = `Next letter: ${upcoming}.`;
-    } else if (passed) {
-      detail = "That was the last letter. The set now includes every 두벌식 key.";
-    } else {
-      detail = `${percent(PASS_ACCURACY)} overall and ${percent(PASS_NEW)} on ${introText} unlocks the next letter.`;
-    }
-    stage.innerHTML = `<div class="summary">
-      <p class="big ${passed ? "pass" : "fail"}">${percent(accuracy)}</p>
-      <p>${introText} was ${percent(neuAccuracy)}.</p>
-      <p>${detail}</p>
-    </div>`;
-    return;
-  }
+function vowelFit(parts) {
+  const vertical = parts.find((part) => part.role === "v");
+  if (!vertical) return "";
+  if ("ㅐㅔㅒㅖ".includes(vertical.jamo)) return "v-wide";
+  if (vertical.jamo === "ㅣ") return "v-narrow";
+  return "v-std";
+}
 
+function glyphHtml(strokes, at) {
+  const composed = renderStrokes(strokes);
+  const { kind, parts } = syllableParts(strokes);
+  const jongs = parts.filter((part) => part.role === "jong");
+  const slices = parts.map((part) => {
+    const state = part.index < at ? "done" : part.index === at ? "now" : "ahead";
+    const split = part.role === "jong" && jongs.length > 1 ? (part.index === jongs[0].index ? " j1" : " j2") : "";
+    return `<span class="slice ${part.role}${split} ${state}" aria-hidden="true"><span>${composed}</span></span>`;
+  });
+  const flags = [
+    kind,
+    kind === "mixed" ? vowelFit(parts) : "",
+    jongs.length ? "has-jong" : "",
+    jongs.length > 1 ? "split" : "",
+  ].filter(Boolean);
+  return `<span class="glyph ${flags.join(" ")}" role="img" aria-label="${composed}">${slices.join("")}</span>`;
+}
+
+function renderHangul(word, active) {
+  if (!active || !word.syllables || drill.ki >= word.strokes.length) {
+    return `<span class="hangul">${word.text}</span>`;
+  }
+  let offset = 0;
+  const pieces = word.syllables.map((strokes) => {
+    const end = offset + strokes.length;
+    let html;
+    if (drill.ki >= end) html = `<span class="syllable done">${renderStrokes(strokes)}</span>`;
+    else if (drill.ki >= offset) html = glyphHtml(strokes, drill.ki - offset);
+    else html = `<span class="syllable ahead">${renderStrokes(strokes)}</span>`;
+    offset = end;
+    return html;
+  });
+  return `<span class="hangul">${pieces.join("")}</span>`;
+}
+
+function renderStage() {
   const words = drill.lines[drill.li];
   stage.innerHTML = `<div class="line">${words
     .map((word, index) => {
-      if (index < drill.wi) {
-        return `<div class="word done"><span class="hangul">${word.text}</span></div>`;
+      const active = index === drill.wi;
+      const ready = active && drill.ki === word.strokes.length;
+      let chips = "";
+      if (drill.hint) {
+        chips = word.strokes
+          .map((stroke, keyIndex) => {
+            const state = !active ? "" : keyIndex < drill.ki ? "done" : keyIndex === drill.ki ? "now" : "";
+            return chip(stroke, state);
+          })
+          .join("");
+        if (ready) chips += `<kbd class="now">Space</kbd>`;
+        chips = `<span class="chips">${chips}</span>`;
       }
-      const chips = word.strokes
-        .map((stroke, keyIndex) => {
-          const state = index !== drill.wi ? "" : keyIndex < drill.ki ? "done" : keyIndex === drill.ki ? "now" : "";
-          return chip(stroke, state);
-        })
-        .join("");
-      const space =
-        index === drill.wi && drill.ki === word.strokes.length ? `<kbd class="now">Space</kbd>` : "";
-      const klass = index === drill.wi ? "now" : "ahead";
-      return `<div class="word ${klass}"><span class="hangul">${word.text}</span><span class="chips">${chips}${space}</span></div>`;
+      const klass = index < drill.wi || ready ? "done" : active ? "now" : "ahead";
+      return `<div class="word ${klass}">${renderHangul(word, active)}${chips}</div>`;
     })
     .join("")}</div>`;
 }
@@ -239,16 +336,22 @@ function renderCallout() {
   const word = currentWord();
   callout.hidden = false;
   if (drill.ki === word.strokes.length) {
-    callout.innerHTML = `<p class="finger">thumb</p><p class="bigkey">Space</p><p class="jamo-note">next word</p>`;
+    callout.innerHTML = drill.hint
+      ? `<p class="finger">thumb</p><p class="bigkey">Space</p><p class="jamo-note">next word</p>`
+      : `<p class="jamo-note">next word</p>`;
     return;
   }
   const stroke = word.strokes[drill.ki];
+  if (!drill.hint) {
+    callout.innerHTML = `<p class="finger">${stroke.finger}</p>`;
+    return;
+  }
   const shift = stroke.shift ? `${preferredShift(stroke)} shift, then ` : "";
   callout.innerHTML = `<p class="finger">${shift}${stroke.finger}</p><p class="bigkey">${stroke.us}</p><p class="jamo-note">${stroke.jamo}</p>`;
 }
 
 function keyUnlocked(code) {
-  const pool = poolForLesson(progress.current);
+  const pool = currentPool();
   const key = KEYS[code];
   return pool.some((stroke) => stroke.jamo === key.jamo || stroke.jamo === key.shiftJamo);
 }
@@ -258,7 +361,7 @@ function renderBoard() {
     drill && drill.phase === "drill" && drill.ki < currentWord().strokes.length
       ? currentWord().strokes[drill.ki]
       : null;
-  const pool = poolForLesson(progress.current);
+  const pool = currentPool();
   const rows = KEY_ROWS.map((row, index) => {
     const keys = row
       .map((code) => {
@@ -286,44 +389,36 @@ function renderBoard() {
   board.innerHTML = rows.join("");
 }
 
-function renderChrome() {
-  const lesson = progress.current;
-  const intro = introduced(lesson)
-    .map((stroke) => `${keyLabel(stroke)} ${stroke.jamo}`)
+function renderStruggle() {
+  const items = struggling(currentPool(), progress.tally, 5);
+  if (!items.length) {
+    struggle.hidden = true;
+    struggle.textContent = "";
+    return;
+  }
+  struggle.hidden = false;
+  const body = items
+    .map((item) => `${item.stroke.jamo} ${item.miss}`)
     .join("  ·  ");
-  eyebrow.textContent = `Lesson ${lesson + 1} of ${LESSON_COUNT} · ${stageName(lesson)}`;
-  title.textContent = intro;
+  struggle.innerHTML = `<span>Missed most</span>  ${body}`;
+}
+
+function renderChrome() {
+  const pool = currentPool();
+  const learning = pool.filter((stroke) => !isCompetent(progress.tally[strokeKey(stroke)]));
+  const shown = learning.length ? learning : pool.slice(-1);
+  document.body.classList.toggle("hints", Boolean(drill && drill.hint));
+  eyebrow.textContent = `${progress.pool} of ${ORDER.length} · ${stageName(progress.pool - 2)}`;
+  title.textContent = shown
+    .map((stroke) => (drill && drill.hint ? `${keyLabel(stroke)} ${stroke.jamo}` : stroke.jamo))
+    .join("  ·  ");
   help.textContent =
-    "Fingers rest on A S D F and J K L. The bumps are under F and J. The page reads the physical key, so a US keyboard works with Korean input on or off.";
-  if (!drill || drill.correct + drill.wrong === 0) {
-    score.textContent = drill && drill.phase === "drill" ? `Line 1 of ${LINES_PER_DRILL}` : "";
-  } else if (drill.phase === "drill") {
-    score.textContent = `${percent(stats().accuracy)} · line ${drill.li + 1} of ${LINES_PER_DRILL}`;
-  } else {
-    score.textContent = percent(stats().accuracy);
-  }
-
-  const { passed } = drill && drill.phase === "summary" ? stats() : { passed: false };
-  const more = lesson < LESSON_COUNT - 1;
-  nextButton.disabled = !(drill && drill.phase === "summary" && passed && more);
-  nextButton.textContent = progress.finished && !more ? "All letters unlocked" : "Add the next letter";
-
-  const signature = `${progress.unlocked}:${progress.finished}`;
-  if (signature !== optionSignature) {
-    optionSignature = signature;
-    lessonSelect.innerHTML = "";
-    for (let i = 0; i < LESSON_COUNT; i++) {
-      const option = document.createElement("option");
-      option.value = String(i);
-      const label = introduced(i)
-        .map((stroke) => stroke.jamo)
-        .join(" ");
-      option.textContent = `${i + 1}  ${label}`;
-      option.disabled = i > progress.unlocked;
-      lessonSelect.append(option);
-    }
-  }
-  if (lessonSelect.value !== String(lesson)) lessonSelect.value = String(lesson);
+    "Fingers rest on the home row. The bumps are under the index fingers. The syllable marks the piece to type next. Press ? to see the US key, and ` to hide the keyboard. The page reads the physical key, so a US keyboard works with Korean input on or off.";
+  const { accuracy, total } = stats();
+  const line = drill ? `line ${drill.li + 1} of ${LINES_PER_DRILL}` : "";
+  const added = drill && drill.notice ? `${drill.notice} · ` : "";
+  score.textContent = total === 0 ? `${added}${line}` : `${added}${percent(accuracy)} · ${line}`;
+  renderStruggle();
 }
 
 function render() {
@@ -335,33 +430,22 @@ function render() {
 
 window.addEventListener("keydown", onKey, true);
 
+applyKeyboard();
+
+keyboardButton.addEventListener("click", () => {
+  keyboardButton.blur();
+  toggleKeyboard();
+});
+
 repeatButton.addEventListener("click", () => {
   repeatButton.blur();
   startDrill();
 });
 
-nextButton.addEventListener("click", () => {
-  nextButton.blur();
-  if (progress.current >= LESSON_COUNT - 1) return;
-  progress.current += 1;
-  progress.unlocked = Math.max(progress.unlocked, progress.current);
-  saveProgress();
-  startDrill();
-});
-
-lessonSelect.addEventListener("change", () => {
-  const next = clampLesson(Number(lessonSelect.value));
-  if (next > progress.unlocked) return;
-  progress.current = next;
-  saveProgress();
-  lessonSelect.blur();
-  startDrill();
-});
-
 resetButton.addEventListener("click", () => {
   resetButton.blur();
-  if (!window.confirm("Clear lesson progress and start from ㅇ and ㅏ?")) return;
-  progress = { unlocked: 0, current: 0, finished: false };
+  if (!window.confirm("Clear progress and start from ㅇ and ㅏ?")) return;
+  progress = freshProgress();
   saveProgress();
   startDrill();
 });

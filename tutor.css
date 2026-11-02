@@ -71,6 +71,18 @@ h1 {
   line-height: 1.45;
 }
 
+.struggle {
+  max-width: 980px;
+  margin: 10px auto 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.struggle span {
+  color: var(--dim);
+}
+
 #stage {
   max-width: 980px;
   margin: 28px auto 0;
@@ -92,9 +104,101 @@ h1 {
 }
 
 .hangul {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.04em;
   font-size: 42px;
-  line-height: 1.1;
+  line-height: 1;
   letter-spacing: 0.02em;
+}
+
+/* One composed syllable, clipped into pieces. A finished character is a
+   single code point, so the pieces are the same glyph with a window on
+   each stroke. The windows follow Noto Sans CJK KR's ink. */
+.glyph {
+  position: relative;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  letter-spacing: 0;
+}
+
+.slice {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+.slice span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  line-height: 1;
+}
+
+.slice.now {
+  z-index: 2;
+  color: var(--amber);
+}
+
+.slice.done {
+  z-index: 1;
+  color: var(--green);
+}
+
+.slice.ahead {
+  color: #c8c4ba;
+}
+
+.glyph.vertical:not(.has-jong) .slice.cho { clip-path: inset(0 42% 0 0); }
+.glyph.vertical:not(.has-jong) .slice.v { clip-path: inset(0 0 0 60%); }
+
+.glyph.vertical.has-jong .slice.cho { clip-path: inset(0 44% 42% 0); }
+.glyph.vertical.has-jong .slice.v { clip-path: inset(0 0 42% 58%); }
+.glyph.vertical.has-jong .slice.jong { clip-path: inset(56% 0 0 0); }
+.glyph.vertical.has-jong.split .slice.jong.j1 { clip-path: inset(56% 54% 0 0); }
+.glyph.vertical.has-jong.split .slice.jong.j2 { clip-path: inset(56% 0 0 46%); }
+
+.glyph.horizontal:not(.has-jong) .slice.cho { clip-path: inset(0 0 40% 0); }
+.glyph.horizontal:not(.has-jong) .slice.h { clip-path: inset(54% 0 0 0); }
+
+.glyph.horizontal.has-jong .slice.cho { clip-path: inset(0 0 52% 0); }
+.glyph.horizontal.has-jong .slice.h { clip-path: inset(42% 0 36% 0); }
+.glyph.horizontal.has-jong .slice.jong { clip-path: inset(64% 0 0 0); }
+
+.glyph.mixed.v-std:not(.has-jong) .slice.cho { clip-path: inset(0 40% 38% 0); }
+.glyph.mixed.v-std:not(.has-jong) .slice.h { clip-path: inset(56% 40% 0 0); }
+.glyph.mixed.v-std:not(.has-jong) .slice.v { clip-path: inset(0 0 0 63%); }
+
+.glyph.mixed.v-wide:not(.has-jong) .slice.cho { clip-path: inset(0 50% 38% 0); }
+.glyph.mixed.v-wide:not(.has-jong) .slice.h { clip-path: inset(56% 50% 0 0); }
+.glyph.mixed.v-wide:not(.has-jong) .slice.v { clip-path: inset(0 0 0 52%); }
+
+.glyph.mixed.v-narrow:not(.has-jong) .slice.cho { clip-path: inset(0 32% 38% 0); }
+.glyph.mixed.v-narrow:not(.has-jong) .slice.h { clip-path: inset(56% 32% 0 0); }
+.glyph.mixed.v-narrow:not(.has-jong) .slice.v { clip-path: inset(0 0 0 68%); }
+
+.glyph.mixed.v-std.has-jong .slice.cho { clip-path: inset(0 40% 40% 0); }
+.glyph.mixed.v-std.has-jong .slice.h { clip-path: inset(52% 40% 38% 0); }
+.glyph.mixed.v-std.has-jong .slice.v { clip-path: inset(0 0 38% 63%); }
+
+.glyph.mixed.v-wide.has-jong .slice.cho { clip-path: inset(0 50% 40% 0); }
+.glyph.mixed.v-wide.has-jong .slice.h { clip-path: inset(52% 50% 38% 0); }
+.glyph.mixed.v-wide.has-jong .slice.v { clip-path: inset(0 0 38% 52%); }
+
+.glyph.mixed.v-narrow.has-jong .slice.cho { clip-path: inset(0 32% 40% 0); }
+.glyph.mixed.v-narrow.has-jong .slice.h { clip-path: inset(52% 32% 38% 0); }
+.glyph.mixed.v-narrow.has-jong .slice.v { clip-path: inset(0 0 38% 68%); }
+
+.glyph.mixed.has-jong .slice.jong { clip-path: inset(62% 0 0 0); }
+
+.word.now .syllable.done {
+  color: var(--green);
+}
+
+.word.now .syllable.ahead {
+  color: var(--muted);
 }
 
 .word.done .hangul {
@@ -170,10 +274,14 @@ kbd small {
 .callout {
   max-width: 980px;
   margin: 8px auto 0;
-  min-height: 92px;
+  min-height: 28px;
   display: flex;
   align-items: baseline;
   gap: 16px;
+}
+
+body.keyboard-hidden #board {
+  display: none;
 }
 
 .callout[hidden] {
@@ -255,6 +363,30 @@ kbd small {
 .key.bump .us {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+body:not(.hints) .key .us {
+  display: none;
+}
+
+body:not(.hints) .key .ko {
+  margin-top: 0;
+  font-size: 22px;
+  color: var(--ink);
+}
+
+body:not(.hints) .key.next .ko,
+body:not(.hints) .key.bad .ko {
+  color: var(--amber-ink);
+}
+
+body:not(.hints) .key.bump .ko {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+body:not(.hints) .chips {
+  display: none;
 }
 
 .key.locked {
