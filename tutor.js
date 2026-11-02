@@ -382,6 +382,59 @@ export function stageName(lessonIndex) {
   return "Shift";
 }
 
+/** A window that already counts as learned. */
+export function passingStat() {
+  return {
+    hit: MIN_ATTEMPTS,
+    miss: 0,
+    recent: Array.from({ length: MIN_ATTEMPTS }, () => 1),
+  };
+}
+
+/**
+ * Next stage boundary. Home row lands on ㄱ, the rest of the keyboard
+ * lands on ㅆ, and Shift lands on the full set. Letters before the
+ * landing letter count as learned; the full set marks every letter.
+ * @param {number} pool
+ * @returns {{ pool: number, learned: number, label: string, notice: string } | null}
+ */
+export function stageSkip(pool) {
+  if (!Number.isInteger(pool) || pool >= ORDER.length) return null;
+  const here = stageName(Math.max(0, pool - 2));
+  let next = Math.max(pool, 2) + 1;
+  while (next < ORDER.length && stageName(next - 2) === here) next += 1;
+  const done = next === ORDER.length;
+  const jamo = done ? "" : ORDER[next - 1].jamo;
+  return {
+    pool: next,
+    learned: done ? ORDER.length : next - 1,
+    label: done ? "Skip to the end" : `Skip to ${jamo}`,
+    notice: done ? "Skipped to the full set" : `Skipped to ${jamo}`,
+  };
+}
+
+/**
+ * Progress after one stage skip. The landing letter is cleared so it
+ * stays the letter to practice. The full set has no landing letter.
+ * @param {{ pool: number, tally?: Record<string, {hit?: number, miss?: number, recent?: number[]}>, finished?: boolean }} progress
+ * @returns {{ pool: number, tally: Record<string, {hit: number, miss: number, recent: number[]}>, finished: boolean, notice: string } | null}
+ */
+export function applyStageSkip(progress) {
+  const next = stageSkip(progress.pool);
+  if (!next) return null;
+  const tally = { ...(progress.tally ?? {}) };
+  for (let i = 0; i < next.learned; i += 1) {
+    tally[strokeKey(ORDER[i])] = passingStat();
+  }
+  if (next.pool < ORDER.length) delete tally[strokeKey(ORDER[next.pool - 1])];
+  return {
+    pool: next.pool,
+    tally,
+    finished: next.pool === ORDER.length,
+    notice: next.notice,
+  };
+}
+
 /** @param {Stroke} stroke */
 export function keyLabel(stroke) {
   return stroke.shift ? `Shift+${stroke.us}` : stroke.us;

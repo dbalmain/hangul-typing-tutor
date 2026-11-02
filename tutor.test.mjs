@@ -4,6 +4,7 @@ import {
   KEYS,
   LESSON_COUNT,
   ORDER,
+  applyStageSkip,
   focusStroke,
   generateLine,
   generatePracticeLine,
@@ -13,12 +14,14 @@ import {
   isCompetent,
   isHintRequest,
   latinStrokes,
-  noteAttempt,
   mulberry32,
+  noteAttempt,
+  passingStat,
   poolForLesson,
   poolIsCompetent,
   renderStrokes,
   stageName,
+  stageSkip,
   statusReport,
   strokeKey,
   strokeMatches,
@@ -195,6 +198,56 @@ test("a rough start falls out of the last 10 presses", () => {
   assert.equal(poolIsCompetent(pool, tally), false);
   tally[strokeKey(giyeok)] = { hit: 2, miss: 8, recent: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] };
   assert.equal(poolIsCompetent(pool, tally), true);
+});
+
+test("skip jumps one stage and marks the earlier letters learned", () => {
+  const home = stageSkip(2);
+  assert.equal(home.pool, 10);
+  assert.equal(home.learned, 9);
+  assert.equal(home.label, "Skip to ㄱ");
+  assert.equal(home.notice, "Skipped to ㄱ");
+  assert.equal(ORDER[home.pool - 1].jamo, "ㄱ");
+  assert.equal(stageSkip(9).pool, 10);
+  assert.equal(isCompetent(passingStat()), true);
+
+  const giyeok = ORDER.find((stroke) => stroke.jamo === "ㄱ" && !stroke.shift);
+  const applied = applyStageSkip({
+    pool: 2,
+    tally: { [strokeKey(giyeok)]: { hit: 10, miss: 0 } },
+    finished: false,
+  });
+  assert.equal(applied.pool, 10);
+  assert.equal(applied.finished, false);
+  assert.equal(applied.tally[strokeKey(giyeok)], undefined);
+  assert.equal(isCompetent(applied.tally[strokeKey(ORDER[0])]), true);
+  assert.equal(poolIsCompetent(ORDER.slice(0, 9), applied.tally), true);
+  assert.equal(poolIsCompetent(ORDER.slice(0, 10), applied.tally), false);
+  assert.equal(focusStroke(ORDER.slice(0, 10), applied.tally).jamo, "ㄱ");
+
+  const rest = stageSkip(10);
+  assert.equal(rest.pool, 27);
+  assert.equal(rest.learned, 26);
+  assert.equal(rest.label, "Skip to ㅆ");
+  assert.equal(ORDER[rest.pool - 1].jamo, "ㅆ");
+  assert.equal(stageSkip(26).pool, 27);
+  const atSsang = applyStageSkip({ pool: 10, tally: applied.tally, finished: false });
+  assert.equal(atSsang.pool, 27);
+  assert.equal(focusStroke(ORDER.slice(0, 27), atSsang.tally).jamo, "ㅆ");
+  assert.equal(poolIsCompetent(ORDER.slice(0, 26), atSsang.tally), true);
+
+  const shift = stageSkip(27);
+  assert.equal(shift.pool, ORDER.length);
+  assert.equal(shift.learned, ORDER.length);
+  assert.equal(shift.label, "Skip to the end");
+  assert.equal(shift.notice, "Skipped to the full set");
+  assert.equal(stageSkip(32).pool, ORDER.length);
+  const done = applyStageSkip({ pool: 27, tally: atSsang.tally, finished: false });
+  assert.equal(done.pool, ORDER.length);
+  assert.equal(done.finished, true);
+  assert.equal(done.notice, "Skipped to the full set");
+  assert.equal(poolIsCompetent(ORDER, done.tally), true);
+  assert.equal(stageSkip(ORDER.length), null);
+  assert.equal(applyStageSkip({ pool: ORDER.length, tally: done.tally, finished: true }), null);
 });
 
 test("a status report names the letters still blocking the next one", () => {

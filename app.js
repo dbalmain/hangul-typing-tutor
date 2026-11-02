@@ -4,6 +4,7 @@ import {
   LINES_PER_DRILL,
   ORDER,
   RECENT_CAP,
+  applyStageSkip,
   focusStroke,
   generatePracticeLine,
   isBoardToggle,
@@ -16,6 +17,7 @@ import {
   preferredShift,
   renderStrokes,
   stageName,
+  stageSkip,
   statusReport,
   strokeKey,
   strokeMatches,
@@ -37,6 +39,7 @@ const stage = document.querySelector("#stage");
 const callout = document.querySelector("#callout");
 const board = document.querySelector("#board");
 const repeatButton = document.querySelector("#repeat");
+const skipButton = document.querySelector("#skip");
 const resetButton = document.querySelector("#reset");
 const keyboardButton = document.querySelector("#keyboard");
 const saveButton = document.querySelector("#save");
@@ -420,6 +423,9 @@ function renderChrome() {
   const line = drill ? `line ${drill.li + 1} of ${LINES_PER_DRILL}` : "";
   const added = drill && drill.notice ? `${drill.notice} · ` : "";
   score.textContent = total === 0 ? `${added}${line}` : `${added}${percent(accuracy)} · ${line}`;
+  const skip = stageSkip(progress.pool);
+  skipButton.hidden = !skip;
+  if (skip) skipButton.textContent = skip.label;
   renderStruggle();
 }
 
@@ -483,6 +489,19 @@ saveButton.addEventListener("click", () => {
 repeatButton.addEventListener("click", () => {
   repeatButton.blur();
   startDrill();
+});
+
+skipButton.addEventListener("click", () => {
+  skipButton.blur();
+  const applied = applyStageSkip(progress);
+  if (!applied) return;
+  const where = applied.pool === ORDER.length ? "the full set" : ORDER[applied.pool - 1].jamo;
+  if (!window.confirm(`Skip ahead to ${where}? Earlier letters will count as learned.`)) return;
+  progress = { pool: applied.pool, tally: applied.tally, finished: applied.finished };
+  saveProgress();
+  startDrill();
+  drill.notice = applied.notice;
+  render();
 });
 
 resetButton.addEventListener("click", () => {
