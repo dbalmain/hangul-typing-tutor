@@ -16,6 +16,7 @@ import {
   preferredShift,
   renderStrokes,
   stageName,
+  statusReport,
   strokeKey,
   strokeMatches,
   struggling,
@@ -38,6 +39,7 @@ const board = document.querySelector("#board");
 const repeatButton = document.querySelector("#repeat");
 const resetButton = document.querySelector("#reset");
 const keyboardButton = document.querySelector("#keyboard");
+const saveButton = document.querySelector("#save");
 
 let progress = loadProgress();
 let keyboardHidden = localStorage.getItem(KEYBOARD) === "hidden";
@@ -435,6 +437,47 @@ applyKeyboard();
 keyboardButton.addEventListener("click", () => {
   keyboardButton.blur();
   toggleKeyboard();
+});
+
+let saveTimer = 0;
+
+function flashSave(text) {
+  window.clearTimeout(saveTimer);
+  saveButton.textContent = text;
+  saveTimer = window.setTimeout(() => {
+    saveButton.textContent = "Save status";
+  }, 1400);
+}
+
+async function saveStatus() {
+  saveButton.blur();
+  const report = statusReport(progress, {
+    keyboard: keyboardHidden ? "hidden" : "shown",
+    drill: drill
+      ? {
+          line: drill.li + 1,
+          lines: LINES_PER_DRILL,
+          correct: drill.correct,
+          wrong: drill.wrong,
+        }
+      : null,
+  });
+  report.savedAt = new Date().toISOString();
+  try {
+    const response = await fetch("/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+    });
+    if (!response.ok) throw new Error(String(response.status));
+    flashSave("Saved");
+  } catch {
+    flashSave("Save failed");
+  }
+}
+
+saveButton.addEventListener("click", () => {
+  saveStatus();
 });
 
 repeatButton.addEventListener("click", () => {

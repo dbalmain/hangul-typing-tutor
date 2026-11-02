@@ -311,6 +311,46 @@ export function focusStroke(pool, tally) {
   return top ? top.stroke : null;
 }
 
+/**
+ * Readable copy of saved progress. ./start writes this to status.json.
+ * @param {{ pool: number, tally?: Record<string, {hit?: number, miss?: number, recent?: number[]}>, finished?: boolean }} progress
+ * @param {{ keyboard?: string, drill?: { line: number, lines: number, correct: number, wrong: number } | null }} [extra]
+ */
+export function statusReport(progress, extra = {}) {
+  const tally = progress.tally ?? {};
+  const pool = ORDER.slice(0, progress.pool);
+  const focus = focusStroke(pool, tally);
+  const letters = pool.map((stroke) => {
+    const stat = tally[strokeKey(stroke)] ?? { hit: 0, miss: 0 };
+    const recent = Array.isArray(stat.recent) ? stat.recent.filter((bit) => bit === 0 || bit === 1) : [];
+    return {
+      jamo: stroke.jamo,
+      key: keyLabel(stroke),
+      hit: stat.hit ?? 0,
+      miss: stat.miss ?? 0,
+      recent,
+      competent: isCompetent(stat),
+    };
+  });
+  return {
+    pool: progress.pool,
+    lettersTotal: ORDER.length,
+    stage: stageName(Math.max(0, progress.pool - 2)),
+    finished: Boolean(progress.finished),
+    keyboard: extra.keyboard ?? "shown",
+    focus: focus ? { jamo: focus.jamo, key: keyLabel(focus) } : null,
+    struggling: struggling(pool, tally).map((item) => ({
+      jamo: item.stroke.jamo,
+      key: keyLabel(item.stroke),
+      hit: item.hit,
+      miss: item.miss,
+    })),
+    blocking: letters.filter((letter) => !letter.competent).map((letter) => letter.jamo),
+    letters,
+    drill: extra.drill ?? null,
+  };
+}
+
 /** Physical Shift+/ on a US keyboard, or a key that produced "?". */
 export function isHintRequest(code, shift, key) {
   return (code === "Slash" && shift) || key === "?";

@@ -19,6 +19,7 @@ import {
   poolIsCompetent,
   renderStrokes,
   stageName,
+  statusReport,
   strokeKey,
   strokeMatches,
   strokeOf,
@@ -194,6 +195,22 @@ test("a rough start falls out of the last 10 presses", () => {
   assert.equal(poolIsCompetent(pool, tally), false);
   tally[strokeKey(giyeok)] = { hit: 2, miss: 8, recent: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] };
   assert.equal(poolIsCompetent(pool, tally), true);
+});
+
+test("a status report names the letters still blocking the next one", () => {
+  const pool = poolForLesson(8);
+  const giyeok = pool.find((stroke) => stroke.jamo === "ㄱ");
+  const tally = {};
+  for (const stroke of pool) tally[strokeKey(stroke)] = { hit: 10, miss: 0 };
+  tally[strokeKey(giyeok)] = { hit: 2, miss: 8, recent: [1, 1, 1, 1, 1, 1, 1, 1, 0, 0] };
+  const report = statusReport({ pool: pool.length, tally, finished: false }, { keyboard: "hidden" });
+  const row = report.letters.find((letter) => letter.jamo === "ㄱ");
+  assert.equal(row.competent, false);
+  assert.equal(row.key, "R");
+  assert.deepEqual(report.blocking, ["ㄱ"]);
+  assert.equal(report.focus.jamo, "ㄱ");
+  assert.equal(report.keyboard, "hidden");
+  assert.equal(report.letters.filter((letter) => letter.competent).length, pool.length - 1);
 });
 
 test("syllable pieces sit beside, under, or both", () => {
