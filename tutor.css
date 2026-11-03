@@ -167,31 +167,36 @@ h1 {
 .glyph.horizontal.has-jong .slice.h { clip-path: inset(42% 0 36% 0); }
 .glyph.horizontal.has-jong .slice.jong { clip-path: inset(64% 0 0 0); }
 
-.glyph.mixed.v-std:not(.has-jong) .slice.cho { clip-path: inset(0 40% 38% 0); }
-.glyph.mixed.v-std:not(.has-jong) .slice.h { clip-path: inset(56% 40% 0 0); }
+/* The horizontal vowel sits just under the initial. A window that runs
+   down to 60% paints that bar with the consonant, so it stays dark on
+   its own turn and only the right vowel appears to light up. */
+.glyph.mixed.v-std:not(.has-jong) .slice.cho { clip-path: inset(0 40% 60% 0); }
+.glyph.mixed.v-std:not(.has-jong) .slice.h { clip-path: inset(38% 40% 0 0); }
 .glyph.mixed.v-std:not(.has-jong) .slice.v { clip-path: inset(0 0 0 63%); }
 
-.glyph.mixed.v-wide:not(.has-jong) .slice.cho { clip-path: inset(0 50% 38% 0); }
-.glyph.mixed.v-wide:not(.has-jong) .slice.h { clip-path: inset(56% 50% 0 0); }
+.glyph.mixed.v-wide:not(.has-jong) .slice.cho { clip-path: inset(0 50% 60% 0); }
+.glyph.mixed.v-wide:not(.has-jong) .slice.h { clip-path: inset(38% 50% 0 0); }
 .glyph.mixed.v-wide:not(.has-jong) .slice.v { clip-path: inset(0 0 0 52%); }
 
-.glyph.mixed.v-narrow:not(.has-jong) .slice.cho { clip-path: inset(0 32% 38% 0); }
-.glyph.mixed.v-narrow:not(.has-jong) .slice.h { clip-path: inset(56% 32% 0 0); }
+.glyph.mixed.v-narrow:not(.has-jong) .slice.cho { clip-path: inset(0 32% 60% 0); }
+.glyph.mixed.v-narrow:not(.has-jong) .slice.h { clip-path: inset(38% 32% 0 0); }
 .glyph.mixed.v-narrow:not(.has-jong) .slice.v { clip-path: inset(0 0 0 68%); }
 
-.glyph.mixed.v-std.has-jong .slice.cho { clip-path: inset(0 40% 40% 0); }
-.glyph.mixed.v-std.has-jong .slice.h { clip-path: inset(52% 40% 38% 0); }
-.glyph.mixed.v-std.has-jong .slice.v { clip-path: inset(0 0 38% 63%); }
+.glyph.mixed.v-std.has-jong .slice.cho { clip-path: inset(0 40% 68% 0); }
+.glyph.mixed.v-std.has-jong .slice.h { clip-path: inset(30% 40% 38% 0); }
+.glyph.mixed.v-std.has-jong .slice.v { clip-path: inset(0 0 0 63%); }
 
-.glyph.mixed.v-wide.has-jong .slice.cho { clip-path: inset(0 50% 40% 0); }
-.glyph.mixed.v-wide.has-jong .slice.h { clip-path: inset(52% 50% 38% 0); }
-.glyph.mixed.v-wide.has-jong .slice.v { clip-path: inset(0 0 38% 52%); }
+.glyph.mixed.v-wide.has-jong .slice.cho { clip-path: inset(0 50% 68% 0); }
+.glyph.mixed.v-wide.has-jong .slice.h { clip-path: inset(30% 50% 38% 0); }
+.glyph.mixed.v-wide.has-jong .slice.v { clip-path: inset(0 0 0 52%); }
 
-.glyph.mixed.v-narrow.has-jong .slice.cho { clip-path: inset(0 32% 40% 0); }
-.glyph.mixed.v-narrow.has-jong .slice.h { clip-path: inset(52% 32% 38% 0); }
-.glyph.mixed.v-narrow.has-jong .slice.v { clip-path: inset(0 0 38% 68%); }
+.glyph.mixed.v-narrow.has-jong .slice.cho { clip-path: inset(0 32% 68% 0); }
+.glyph.mixed.v-narrow.has-jong .slice.h { clip-path: inset(30% 32% 38% 0); }
+.glyph.mixed.v-narrow.has-jong .slice.v { clip-path: inset(0 0 0 68%); }
 
-.glyph.mixed.has-jong .slice.jong { clip-path: inset(62% 0 0 0); }
+.glyph.mixed.v-std.has-jong .slice.jong { clip-path: inset(62% 38% 0 0); }
+.glyph.mixed.v-wide.has-jong .slice.jong { clip-path: inset(62% 50% 0 0); }
+.glyph.mixed.v-narrow.has-jong .slice.jong { clip-path: inset(62% 34% 0 0); }
 
 .word.now .syllable.done {
   color: var(--green);
