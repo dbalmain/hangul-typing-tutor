@@ -4,7 +4,7 @@ import {
   LINES_PER_DRILL,
   ORDER,
   RECENT_CAP,
-  applyStageSkip,
+  applyPlace,
   focusStroke,
   generatePracticeLine,
   isBoardToggle,
@@ -13,11 +13,11 @@ import {
   keyLabel,
   mulberry32,
   noteAttempt,
+  placeIndex,
   poolIsCompetent,
   preferredShift,
   renderStrokes,
   stageName,
-  stageSkip,
   statusReport,
   strokeKey,
   strokeMatches,
@@ -39,7 +39,7 @@ const stage = document.querySelector("#stage");
 const callout = document.querySelector("#callout");
 const board = document.querySelector("#board");
 const repeatButton = document.querySelector("#repeat");
-const skipButton = document.querySelector("#skip");
+const placeSelect = document.querySelector("#place");
 const resetButton = document.querySelector("#reset");
 const keyboardButton = document.querySelector("#keyboard");
 const saveButton = document.querySelector("#save");
@@ -423,9 +423,7 @@ function renderChrome() {
   const line = drill ? `line ${drill.li + 1} of ${LINES_PER_DRILL}` : "";
   const added = drill && drill.notice ? `${drill.notice} · ` : "";
   score.textContent = total === 0 ? `${added}${line}` : `${added}${percent(accuracy)} · ${line}`;
-  const skip = stageSkip(progress.pool);
-  skipButton.hidden = !skip;
-  if (skip) skipButton.textContent = skip.label;
+  placeSelect.value = String(placeIndex(progress.pool, progress.tally));
   renderStruggle();
 }
 
@@ -491,12 +489,48 @@ repeatButton.addEventListener("click", () => {
   startDrill();
 });
 
-skipButton.addEventListener("click", () => {
-  skipButton.blur();
-  const applied = applyStageSkip(progress);
-  if (!applied) return;
-  const where = applied.pool === ORDER.length ? "the full set" : ORDER[applied.pool - 1].jamo;
-  if (!window.confirm(`Skip ahead to ${where}? Earlier letters will count as learned.`)) return;
+function fillPlace() {
+  /** @type {Map<string, HTMLOptGroupElement>} */
+  const groups = new Map();
+  ORDER.forEach((stroke, index) => {
+    const name = stageName(Math.max(0, index - 1));
+    let group = groups.get(name);
+    if (!group) {
+      group = document.createElement("optgroup");
+      group.label = name;
+      groups.set(name, group);
+    }
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = stroke.jamo;
+    group.append(option);
+  });
+  placeSelect.replaceChildren(...groups.values());
+}
+
+fillPlace();
+
+placeSelect.addEventListener("change", () => {
+  const index = Number(placeSelect.value);
+  const current = placeIndex(progress.pool, progress.tally);
+  if (index === current) return;
+  placeSelect.blur();
+  const jamo = ORDER[index].jamo;
+  const message =
+    index === 0
+      ? "Start over from ㅇ and ㅏ?"
+      : index > current
+        ? `Practice from ${jamo}? Earlier letters will count as learned.`
+        : `Go back to ${jamo}? Later letters will need to be learned again.`;
+  if (!window.confirm(message)) {
+    placeSelect.value = String(current);
+    return;
+  }
+  const applied = applyPlace(index);
+  if (!applied) {
+    placeSelect.value = String(current);
+    return;
+  }
   progress = { pool: applied.pool, tally: applied.tally, finished: applied.finished };
   saveProgress();
   startDrill();

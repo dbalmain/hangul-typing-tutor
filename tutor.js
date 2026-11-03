@@ -392,46 +392,33 @@ export function passingStat() {
 }
 
 /**
- * Next stage boundary. Home row lands on ㄱ, the rest of the keyboard
- * lands on ㅆ, and Shift lands on the full set. Letters before the
- * landing letter count as learned; the full set marks every letter.
- * @param {number} pool
- * @returns {{ pool: number, learned: number, label: string, notice: string } | null}
+ * The letter the dropdown should show. The opening pair starts at ㅇ.
+ * @param {number} poolLength
+ * @param {Record<string, {hit?: number, miss?: number, recent?: number[]}>} [tally]
  */
-export function stageSkip(pool) {
-  if (!Number.isInteger(pool) || pool >= ORDER.length) return null;
-  const here = stageName(Math.max(0, pool - 2));
-  let next = Math.max(pool, 2) + 1;
-  while (next < ORDER.length && stageName(next - 2) === here) next += 1;
-  const done = next === ORDER.length;
-  const jamo = done ? "" : ORDER[next - 1].jamo;
-  return {
-    pool: next,
-    learned: done ? ORDER.length : next - 1,
-    label: done ? "Skip to the end" : `Skip to ${jamo}`,
-    notice: done ? "Skipped to the full set" : `Skipped to ${jamo}`,
-  };
+export function placeIndex(poolLength, tally = {}) {
+  const pool = ORDER.slice(0, Math.max(0, poolLength | 0));
+  const found = pool.findIndex((stroke) => !isCompetent(tally[strokeKey(stroke)]));
+  if (found === -1) return Math.max(0, pool.length - 1);
+  return found;
 }
 
 /**
- * Progress after one stage skip. The landing letter is cleared so it
- * stays the letter to practice. The full set has no landing letter.
- * @param {{ pool: number, tally?: Record<string, {hit?: number, miss?: number, recent?: number[]}>, finished?: boolean }} progress
+ * Practice with this letter as the current one. Earlier letters count as
+ * learned. The chosen letter is left unlearned. Index 0 keeps the
+ * opening pair and clears the tally.
+ * @param {number} index
  * @returns {{ pool: number, tally: Record<string, {hit: number, miss: number, recent: number[]}>, finished: boolean, notice: string } | null}
  */
-export function applyStageSkip(progress) {
-  const next = stageSkip(progress.pool);
-  if (!next) return null;
-  const tally = { ...(progress.tally ?? {}) };
-  for (let i = 0; i < next.learned; i += 1) {
-    tally[strokeKey(ORDER[i])] = passingStat();
-  }
-  if (next.pool < ORDER.length) delete tally[strokeKey(ORDER[next.pool - 1])];
+export function applyPlace(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= ORDER.length) return null;
+  const tally = {};
+  for (let i = 0; i < index; i += 1) tally[strokeKey(ORDER[i])] = passingStat();
   return {
-    pool: next.pool,
+    pool: Math.max(2, index + 1),
     tally,
-    finished: next.pool === ORDER.length,
-    notice: next.notice,
+    finished: false,
+    notice: index === 0 ? "" : `Up to ${ORDER[index].jamo}`,
   };
 }
 
