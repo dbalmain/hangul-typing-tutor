@@ -5,6 +5,7 @@ import {
   LESSON_COUNT,
   ORDER,
   applyPlace,
+  emptyMeter,
   focusStroke,
   generateLine,
   generatePracticeLine,
@@ -14,13 +15,19 @@ import {
   isCompetent,
   isHintRequest,
   latinStrokes,
+  meterProgress,
+  meterView,
   mulberry32,
+  normalizeMeter,
   noteAttempt,
   passingStat,
   placeIndex,
   poolForLesson,
   poolIsCompetent,
+  recordRound,
   renderStrokes,
+  rollingAccuracy,
+  scoreKey,
   stageName,
   statusReport,
   strokeKey,
@@ -206,6 +213,8 @@ test("the place dropdown lands on one letter and marks the earlier ones learned"
   assert.equal(start.pool, 2);
   assert.equal(start.notice, "");
   assert.equal(start.finished, false);
+  assert.equal(start.meter.rounds, 0);
+  assert.deepEqual(start.meter.recent, []);
   assert.deepEqual(start.tally, {});
   assert.equal(placeIndex(start.pool, start.tally), 0);
 
@@ -278,6 +287,103 @@ test("? asks for the US key and ` hides the keyboard", () => {
   assert.equal(isBoardToggle("Backquote", false), true);
   assert.equal(isBoardToggle("Backquote", true), false);
   assert.equal(isBoardToggle("Slash", false), false);
+});
+
+test("a run of wrong keys counts as one miss", () => {
+  let burst = false;
+  let misses = 0;
+  let hits = 0;
+  for (let i = 0; i < 5; i += 1) {
+    const scored = scoreKey(burst, false);
+    burst = scored.burst;
+    if (scored.miss) misses += 1;
+    if (scored.hit) hits += 1;
+  }
+  const fixed = scoreKey(burst, true);
+  burst = fixed.burst;
+  if (fixed.hit) hits += 1;
+  assert.equal(misses, 1);
+  assert.equal(hits, 1);
+  assert.equal(burst, false);
+  assert.equal(scoreKey(burst, false).miss, true);
+  assert.equal(scoreKey(true, true).burst, false);
+});
+
+test("the bar follows the last four lines and how many lines since the last letter", () => {
+  assert.deepEqual(normalizeMeter(undefined), { rounds: 0, recent: [] });
+  assert.equal(rollingAccuracy([]), null);
+  assert.equal(rollingAccuracy([{ hit: 0, miss: 0 }]), null);
+  const recent = [
+    { hit: 8, miss: 0 },
+    { hit: 8, miss: 0 },
+    { hit: 8, miss: 0 },
+    { hit: 1, miss: 3 },
+  ];
+  assert.equal(rollingAccuracy(recent), 25 / 28);
+  assert.equal(rollingAccuracy([{ hit: 0, miss: 100 }, ...recent]), 25 / 28);
+
+  assert.equal(meterProgress(0, 1), 0);
+  assert.equal(meterProgress(4, 1), 1);
+  assert.equal(meterProgress(1, 1), 0.25);
+  assert.equal(meterProgress(8, 0.7), 1);
+  assert.equal(meterProgress(24, 0.5), 1);
+  assert.equal(meterProgress(10, 0.4), 0);
+  assert.equal(meterProgress(10, 0.3), 0);
+  assert.ok(meterProgress(4, 0.5) < meterProgress(3, 1));
+
+  assert.deepEqual(
+    normalizeMeter({
+      rounds: -2,
+      recent: [{ hit: 1, miss: 0 }, { hit: "x" }, null, { hit: 0, miss: 0 }, { hit: 2, miss: 1 }],
+    }),
+    { rounds: 0, recent: [{ hit: 1, miss: 0 }, { hit: 2, miss: 1 }] },
+  );
+
+  let meter = emptyMeter();
+  for (let i = 0; i < 3; i += 1) {
+    const step = recordRound(meter, { hit: 8, miss: 0 });
+    assert.equal(step.filled, false);
+    meter = step.meter;
+  }
+  assert.equal(meter.rounds, 3);
+  const steady = meterView(meter, null);
+  assert.equal(steady.rounds, 3);
+  assert.equal(steady.progress, 0.75);
+  const open = meterView(meter, { hit: 8, miss: 0 });
+  assert.equal(open.rounds, 4);
+  assert.equal(open.progress, 1);
+  const slipped = meterView(meter, { hit: 1, miss: 20 });
+  assert.ok(slipped.progress < steady.progress);
+  assert.equal(meterView(meter, { hit: 0, miss: 0 }).rounds, 3);
+
+  const done = recordRound(meter, { hit: 8, miss: 0 });
+  assert.equal(done.filled, true);
+  assert.equal(done.meter.rounds, 4);
+  assert.equal(done.meter.recent.length, 4);
+
+  const long = recordRound(
+    { rounds: 6, recent: [{ hit: 1, miss: 0 }, { hit: 1, miss: 0 }, { hit: 1, miss: 0 }, { hit: 1, miss: 0 }] },
+    { hit: 3, miss: 1 },
+  );
+  assert.equal(long.meter.recent.length, 4);
+  assert.equal(long.meter.recent[3].hit, 3);
+  assert.equal(long.meter.rounds, 7);
+  assert.equal(long.filled, true);
+
+  let half = emptyMeter();
+  for (let i = 0; i < 23; i += 1) half = recordRound(half, { hit: 1, miss: 1 }).meter;
+  const halfDone = recordRound(half, { hit: 1, miss: 1 });
+  assert.equal(halfDone.meter.rounds, 24);
+  assert.equal(halfDone.filled, true);
+
+  let stuck = emptyMeter();
+  for (let i = 0; i < 30; i += 1) {
+    const step = recordRound(stuck, { hit: 2, miss: 3 });
+    assert.equal(step.filled, false);
+    stuck = step.meter;
+  }
+  assert.equal(stuck.rounds, 30);
+  assert.equal(meterProgress(stuck.rounds, rollingAccuracy(stuck.recent)), 0);
 });
 
 test("shift is required only when the letter changes", () => {

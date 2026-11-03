@@ -59,9 +59,28 @@ h1 {
 }
 
 .score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-variant-numeric: tabular-nums;
   font-size: 18px;
   white-space: nowrap;
+}
+
+.meter {
+  display: block;
+  width: 84px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--key-edge);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--amber);
+  border-radius: inherit;
 }
 
 .help {

@@ -192,8 +192,16 @@ export const PASS_ACCURACY = 0.95;
 export const PASS_NEW = 0.9;
 export const MIN_ATTEMPTS = 10;
 export const RECENT_CAP = 20;
-export const LINES_PER_DRILL = 4;
 export const WORDS_PER_LINE = 4;
+/** Finished lines kept for the percentage. One line is a round. */
+export const ROUND_WINDOW = 4;
+/**
+ * At or below this, the bar stays empty. Above it, a lower percentage just
+ * needs more lines. Four clean lines fill the bar, and every line since the
+ * last new letter still counts, so the bar also moves backward.
+ */
+export const PROGRESS_FLOOR = 0.4;
+export const ROUNDS_TO_ADVANCE = 4;
 
 /** @param {Stroke} stroke */
 export function strokeKey(stroke) {
@@ -201,10 +209,9 @@ export function strokeKey(stroke) {
 }
 
 /**
- * Last 10 presses, once that many exist. A lifetime ratio never drops an
- * early miss, so two misses on ㄱ used to demand 18 later hits before the
- * next letter could join. Saved tallies with no window keep the lifetime
- * ratio until the new presses fill one.
+ * Nine of the last 10 presses, once that many exist. Fewer than 10 uses the
+ * lifetime ratio. Focus, the title, and the dropdown use this. The next
+ * letter joins from the progress bar, not from this check.
  * @param {{ hit?: number, miss?: number, recent?: number[] } | null | undefined} stat
  */
 export function isCompetent(stat) {
@@ -255,6 +262,118 @@ export function undoHit(stat) {
     hit: Math.max(0, (stat?.hit ?? 0) - 1),
     miss: Math.max(0, stat?.miss ?? 0),
     recent,
+  };
+}
+
+/**
+ * The first wrong key in a run counts. More wrong keys count again only
+ * after a correct key clears the run.
+ * @param {boolean} burst
+ * @param {boolean} correct
+ */
+export function scoreKey(burst, correct) {
+  if (correct) return { burst: false, hit: true, miss: false };
+  if (burst) return { burst: true, hit: false, miss: false };
+  return { burst: true, hit: false, miss: true };
+}
+
+/** @param {{ hit?: number, miss?: number }[] | null | undefined} recent */
+export function rollingAccuracy(recent) {
+  const window = Array.isArray(recent) ? recent.slice(-ROUND_WINDOW) : [];
+  let hit = 0;
+  let miss = 0;
+  for (const sample of window) {
+    hit += sample?.hit ?? 0;
+    miss += sample?.miss ?? 0;
+  }
+  const total = hit + miss;
+  if (total <= 0) return null;
+  return hit / total;
+}
+
+/**
+ * Share of the way to the next letter. Clamped to 0..1, so a bad stretch
+ * empties it and a long good stretch does not pass 1.
+ * @param {number} rounds
+ * @param {number | null} accuracy
+ */
+export function meterProgress(rounds, accuracy) {
+  if (accuracy == null || rounds <= 0) return 0;
+  const span = 1 - PROGRESS_FLOOR;
+  const raw = (rounds * (accuracy - PROGRESS_FLOOR)) / (ROUNDS_TO_ADVANCE * span);
+  if (raw >= 1 - 1e-9) return 1;
+  if (raw <= 0) return 0;
+  return raw;
+}
+
+export function emptyMeter() {
+  return { rounds: 0, recent: [] };
+}
+
+/**
+ * Saved lines since the last new letter. Old saves have no meter.
+ * @param {{ rounds?: number, recent?: { hit?: number, miss?: number }[] } | null | undefined} meter
+ */
+export function normalizeMeter(meter) {
+  const recent = [];
+  if (meter && Array.isArray(meter.recent)) {
+    for (const sample of meter.recent) {
+      if (!sample || typeof sample !== "object") continue;
+      const hit = sample.hit | 0;
+      const miss = sample.miss | 0;
+      if (hit <= 0 && miss <= 0) continue;
+      if (hit < 0 || miss < 0) continue;
+      recent.push({ hit, miss });
+    }
+  }
+  const rounds = meter && typeof meter === "object" ? Math.max(0, meter.rounds | 0) : 0;
+  return { rounds, recent: recent.slice(-ROUND_WINDOW) };
+}
+
+/**
+ * The open line counts in the percentage immediately, on top of the last
+ * four finished lines, and it counts as a round so the bar can move before
+ * the line ends. Nothing is stored until the line is finished.
+ * @param {{ rounds?: number, recent?: { hit: number, miss: number }[] } | null | undefined} meter
+ * @param {{ hit?: number, miss?: number } | null | undefined} partial
+ */
+export function meterView(meter, partial) {
+  const base = normalizeMeter(meter);
+  let hit = 0;
+  let miss = 0;
+  for (const sample of base.recent) {
+    hit += sample.hit;
+    miss += sample.miss;
+  }
+  const partialHit = Math.max(0, partial?.hit | 0);
+  const partialMiss = Math.max(0, partial?.miss | 0);
+  const inProgress = partialHit > 0 || partialMiss > 0;
+  if (inProgress) {
+    hit += partialHit;
+    miss += partialMiss;
+  }
+  const total = hit + miss;
+  const accuracy = total > 0 ? hit / total : null;
+  const rounds = base.rounds + (inProgress ? 1 : 0);
+  return { rounds, accuracy, progress: meterProgress(rounds, accuracy) };
+}
+
+/**
+ * Store one finished line. The caller adds the next letter when filled.
+ * @param {{ rounds?: number, recent?: { hit: number, miss: number }[] } | null | undefined} meter
+ * @param {{ hit?: number, miss?: number }} sample
+ */
+export function recordRound(meter, sample) {
+  const current = normalizeMeter(meter);
+  const next = {
+    rounds: current.rounds + 1,
+    recent: [...current.recent, { hit: Math.max(0, sample?.hit | 0), miss: Math.max(0, sample?.miss | 0) }].slice(
+      -ROUND_WINDOW,
+    ),
+  };
+  return {
+    meter: next,
+    filled: meterProgress(next.rounds, rollingAccuracy(next.recent)) >= 1,
   };
 }
 
@@ -408,7 +527,7 @@ export function placeIndex(poolLength, tally = {}) {
  * learned. The chosen letter is left unlearned. Index 0 keeps the
  * opening pair and clears the tally.
  * @param {number} index
- * @returns {{ pool: number, tally: Record<string, {hit: number, miss: number, recent: number[]}>, finished: boolean, notice: string } | null}
+ * @returns {{ pool: number, tally: Record<string, {hit: number, miss: number, recent: number[]}>, finished: boolean, meter: {rounds: number, recent: {hit: number, miss: number}[]}, notice: string } | null}
  */
 export function applyPlace(index) {
   if (!Number.isInteger(index) || index < 0 || index >= ORDER.length) return null;
@@ -418,6 +537,7 @@ export function applyPlace(index) {
     pool: Math.max(2, index + 1),
     tally,
     finished: false,
+    meter: emptyMeter(),
     notice: index === 0 ? "" : `Up to ${ORDER[index].jamo}`,
   };
 }

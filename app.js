@@ -1,22 +1,25 @@
 import {
   KEYS,
   KEY_ROWS,
-  LINES_PER_DRILL,
   ORDER,
   RECENT_CAP,
   applyPlace,
+  emptyMeter,
   focusStroke,
   generatePracticeLine,
   isBoardToggle,
   isCompetent,
   isHintRequest,
   keyLabel,
+  meterView,
   mulberry32,
+  normalizeMeter,
   noteAttempt,
   placeIndex,
-  poolIsCompetent,
   preferredShift,
+  recordRound,
   renderStrokes,
+  scoreKey,
   stageName,
   statusReport,
   strokeKey,
@@ -50,7 +53,7 @@ let drill = null;
 let badTimer = 0;
 
 function freshProgress() {
-  return { pool: 2, tally: {}, finished: false };
+  return { pool: 2, tally: {}, finished: false, meter: emptyMeter() };
 }
 
 function clampPool(pool) {
@@ -98,6 +101,7 @@ function normalize(data) {
     pool: clampPool(data.pool),
     tally,
     finished: Boolean(data.finished),
+    meter: normalizeMeter(data.meter),
   };
 }
 
@@ -127,46 +131,46 @@ function toggleKeyboard() {
   applyKeyboard();
 }
 
-function startDrill() {
-  const poolBefore = currentPool();
-  let added = null;
-  if (progress.pool < ORDER.length && poolIsCompetent(poolBefore, progress.tally)) {
-    progress.pool += 1;
-    added = ORDER[progress.pool - 1];
-    saveProgress();
-  }
+function beginLine(notice = "") {
   const pool = currentPool();
-  if (progress.pool === ORDER.length && poolIsCompetent(pool, progress.tally)) {
-    progress.finished = true;
-    saveProgress();
-  }
   const focus = focusStroke(pool, progress.tally);
   const rng = mulberry32((Date.now() ^ (Math.random() * 0x100000000)) >>> 0);
-  const lines = [];
-  for (let i = 0; i < LINES_PER_DRILL; i++) lines.push(generatePracticeLine(rng, pool, focus));
   drill = {
-    lines,
-    li: 0,
+    words: generatePracticeLine(rng, pool, focus),
     wi: 0,
     ki: 0,
     correct: 0,
     wrong: 0,
+    burst: false,
     phase: "drill",
     badCode: null,
     hint: false,
-    notice: added ? `Added ${added.jamo}` : "",
+    notice,
   };
   render();
 }
 
-function currentWord() {
-  return drill.lines[drill.li][drill.wi];
+/** The bar, not the per-letter window, adds the next letter. */
+function closeRound() {
+  const recorded = recordRound(progress.meter, { hit: drill.correct, miss: drill.wrong });
+  progress.meter = recorded.meter;
+  let notice = "";
+  if (recorded.filled && progress.pool < ORDER.length) {
+    progress.pool += 1;
+    notice = `Added ${ORDER[progress.pool - 1].jamo}`;
+    progress.meter = emptyMeter();
+    progress.finished = false;
+  } else if (recorded.filled && !progress.finished) {
+    progress.finished = true;
+    notice = "Full set";
+    progress.meter = emptyMeter();
+  }
+  saveProgress();
+  beginLine(notice);
 }
 
-function stats() {
-  const total = drill.correct + drill.wrong;
-  const accuracy = total === 0 ? 1 : drill.correct / total;
-  return { total, accuracy };
+function currentWord() {
+  return drill.words[drill.wi];
 }
 
 function percent(value) {
@@ -206,6 +210,7 @@ function undo() {
   if (drill.ki === 0) return;
   drill.ki -= 1;
   drill.correct -= 1;
+  drill.burst = false;
   const stroke = currentWord().strokes[drill.ki];
   progress.tally[strokeKey(stroke)] = undoHit(progress.tally[strokeKey(stroke)]);
   saveProgress();
@@ -215,13 +220,18 @@ function undo() {
 
 function press(pressed) {
   const word = currentWord();
-  if (drill.ki === word.strokes.length) {
-    if (pressed.code === "Space" && !pressed.shift) advanceWord();
-    else markWrong(pressed.code, null);
-    return;
-  }
-  const expected = word.strokes[drill.ki];
-  if (strokeMatches(expected, pressed)) {
+  const atEnd = drill.ki === word.strokes.length;
+  const correct = atEnd
+    ? pressed.code === "Space" && !pressed.shift
+    : strokeMatches(word.strokes[drill.ki], pressed);
+  const scored = scoreKey(drill.burst, correct);
+  drill.burst = scored.burst;
+  if (correct) {
+    if (atEnd) {
+      advanceWord();
+      return;
+    }
+    const expected = word.strokes[drill.ki];
     drill.ki += 1;
     drill.correct += 1;
     note(expected, 1);
@@ -229,13 +239,11 @@ function press(pressed) {
     render();
     return;
   }
-  markWrong(pressed.code, expected);
-}
-
-function markWrong(code, expected) {
-  drill.wrong += 1;
-  if (expected) note(expected, 0);
-  drill.badCode = code;
+  if (scored.miss) {
+    drill.wrong += 1;
+    if (!atEnd) note(word.strokes[drill.ki], 0);
+  }
+  drill.badCode = pressed.code;
   window.clearTimeout(badTimer);
   badTimer = window.setTimeout(() => {
     if (drill) drill.badCode = null;
@@ -247,18 +255,13 @@ function markWrong(code, expected) {
 function advanceWord() {
   drill.ki = 0;
   drill.hint = false;
+  drill.burst = false;
   drill.wi += 1;
-  if (drill.wi < drill.lines[drill.li].length) {
+  if (drill.wi < drill.words.length) {
     render();
     return;
   }
-  drill.wi = 0;
-  drill.li += 1;
-  if (drill.li < drill.lines.length) {
-    render();
-    return;
-  }
-  startDrill();
+  closeRound();
 }
 
 function chip(stroke, state) {
@@ -310,7 +313,7 @@ function renderHangul(word, active) {
 }
 
 function renderStage() {
-  const words = drill.lines[drill.li];
+  const words = drill.words;
   stage.innerHTML = `<div class="line">${words
     .map((word, index) => {
       const active = index === drill.wi;
@@ -418,13 +421,39 @@ function renderChrome() {
     .map((stroke) => (drill && drill.hint ? `${keyLabel(stroke)} ${stroke.jamo}` : stroke.jamo))
     .join("  ·  ");
   help.textContent =
-    "Fingers rest on the home row. The bumps are under the index fingers. The syllable marks the piece to type next. Press ? to see the US key, and ` to hide the keyboard. The page reads the physical key, so a US keyboard works with Korean input on or off.";
-  const { accuracy, total } = stats();
-  const line = drill ? `line ${drill.li + 1} of ${LINES_PER_DRILL}` : "";
-  const added = drill && drill.notice ? `${drill.notice} · ` : "";
-  score.textContent = total === 0 ? `${added}${line}` : `${added}${percent(accuracy)} · ${line}`;
+    "Fingers rest on the home row. The bumps are under the index fingers. The syllable marks the piece to type next. Press ? to see the US key, and ` to hide the keyboard. The page reads the physical key, so a US keyboard works with Korean input on or off. A run of wrong keys counts once. The bar is the next letter.";
+  renderScore();
   placeSelect.value = String(placeIndex(progress.pool, progress.tally));
   renderStruggle();
+}
+
+function renderScore() {
+  const partial = drill ? { hit: drill.correct, miss: drill.wrong } : null;
+  const view = meterView(progress.meter, partial);
+  const parts = [];
+  if (drill && drill.notice) parts.push(drill.notice);
+  if (view.accuracy != null) parts.push(percent(view.accuracy));
+  score.replaceChildren();
+  if (parts.length) {
+    const text = document.createElement("span");
+    text.className = "score-text";
+    text.textContent = parts.join(" · ");
+    score.append(text);
+  }
+  if (progress.pool >= ORDER.length) return;
+  const meter = document.createElement("span");
+  meter.className = "meter";
+  meter.setAttribute("role", "progressbar");
+  meter.setAttribute("aria-valuemin", "0");
+  meter.setAttribute("aria-valuemax", "100");
+  meter.setAttribute("aria-valuenow", String(Math.round(view.progress * 100)));
+  meter.setAttribute("aria-label", "Progress to the next letter");
+  meter.title = "Next letter. Four clean lines fill this. The last 4 lines set the pace, and at 40% or below it stays empty.";
+  const fill = document.createElement("span");
+  fill.className = "meter-fill";
+  fill.style.width = `${view.progress * 100}%`;
+  meter.append(fill);
+  score.append(meter);
 }
 
 function render() {
@@ -459,10 +488,14 @@ async function saveStatus() {
     keyboard: keyboardHidden ? "hidden" : "shown",
     drill: drill
       ? {
-          line: drill.li + 1,
-          lines: LINES_PER_DRILL,
           correct: drill.correct,
           wrong: drill.wrong,
+          rounds: progress.meter.rounds,
+          accuracy: meterView(progress.meter, { hit: drill.correct, miss: drill.wrong }).accuracy,
+          towardNext:
+            progress.pool < ORDER.length
+              ? meterView(progress.meter, { hit: drill.correct, miss: drill.wrong }).progress
+              : null,
         }
       : null,
   });
@@ -486,7 +519,7 @@ saveButton.addEventListener("click", () => {
 
 repeatButton.addEventListener("click", () => {
   repeatButton.blur();
-  startDrill();
+  beginLine("");
 });
 
 function fillPlace() {
@@ -531,11 +564,14 @@ placeSelect.addEventListener("change", () => {
     placeSelect.value = String(current);
     return;
   }
-  progress = { pool: applied.pool, tally: applied.tally, finished: applied.finished };
+  progress = {
+    pool: applied.pool,
+    tally: applied.tally,
+    finished: applied.finished,
+    meter: applied.meter,
+  };
   saveProgress();
-  startDrill();
-  drill.notice = applied.notice;
-  render();
+  beginLine(applied.notice);
 });
 
 resetButton.addEventListener("click", () => {
@@ -543,7 +579,7 @@ resetButton.addEventListener("click", () => {
   if (!window.confirm("Clear progress and start from ㅇ and ㅏ?")) return;
   progress = freshProgress();
   saveProgress();
-  startDrill();
+  beginLine("");
 });
 
-startDrill();
+beginLine("");
